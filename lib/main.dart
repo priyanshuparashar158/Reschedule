@@ -6,20 +6,19 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:gsheets/gsheets.dart';
 
-// --- 1. CONFIGURATION (REPLACE THESE) ---
-const String spreadsheetId = 'YOUR API KEY'; // From your Sheet URL
+// --- 1. CONFIGURATION ---
+const String spreadsheetId = 'your credentials'; // Your Sheet ID
 const String credentialsJson = r'''
 {
-  YOUR JSON
+  your credentials
 }
-
-'''; // Paste your entire JSON key content here
+'''; 
 
 void main() {
   runApp(const RescheduleApp());
 }
 
-// --- 2. THEME & APP SETUP ---
+// --- 2. THEME ---
 class RescheduleApp extends StatelessWidget {
   const RescheduleApp({super.key});
 
@@ -42,9 +41,9 @@ class RescheduleApp extends StatelessWidget {
   }
 }
 
-// --- 3. SERVICES (LOGIC LAYER) ---
+// --- 3. SERVICES ---
 
-// A. GOOGLE SHEETS MANAGER (Replaces st.connection)
+// A. GOOGLE SHEETS MANAGER (UPDATED FOR UPPERCASE CONSISTENCY)
 class GSheetsManager {
   late GSheets _gsheets;
   Spreadsheet? _spreadsheet;
@@ -56,62 +55,76 @@ class GSheetsManager {
     _worksheet = _spreadsheet!.worksheetByTitle('Sheet1') ?? await _spreadsheet!.addWorksheet('Sheet1');
   }
 
-  // Equivalent to: df = conn.read() ... conn.update()
-  Future<List<Map<String, String>>> syncUserAndGetPeers(
-      String id, String name, List<String> interests) async {
+  // WRITE: Registers the user (Forces UPPERCASE to prevent duplicates)
+  Future<void> registerMe(String id, String name, List<String> interests) async {
+    // 1. Force Uppercase inputs
+    final String cleanId = id.trim().toUpperCase();
+    final String cleanName = name.trim().toUpperCase();
     
-    // 1. Fetch all rows
     final rows = await _worksheet!.values.map.allRows() ?? [];
     
-    // 2. Check if user exists, update or append
     int rowIndex = -1;
     for (int i = 0; i < rows.length; i++) {
-      if (rows[i]['student_id'] == id) {
-        rowIndex = i + 2; // +2 because Sheets is 1-indexed and has header
+      // Check against uppercase ID in sheet
+      if (rows[i]['student_id'].toString().toUpperCase() == cleanId) {
+        rowIndex = i + 2; 
         break;
       }
     }
 
-    final userRow = {
-      'student_id': id,
-      'name': name,
-      'interests': interests.join(','),
-      'is_active': 'TRUE'
-    };
+    // Prepare row data (All Uppercase)
+    final userRow = [cleanId, cleanName, interests.join(','), 'TRUE'];
 
     if (rowIndex != -1) {
-      // Update existing
-      await _worksheet!.values.map.insertRowByKey(rowIndex, userRow);
+      // Update existing row
+      await _worksheet!.values.insertRow(rowIndex, userRow); 
     } else {
-      // Append new
-      await _worksheet!.values.map.appendRow(userRow);
+      // Create new row
+      await _worksheet!.values.appendRow(userRow);
     }
+  }
 
-    // 3. Return active peers (exclude self)
-    // Re-fetch to ensure clean state or use local logic
-    final updatedRows = await _worksheet!.values.map.allRows() ?? [];
-    return updatedRows.where((row) {
-      return row['is_active'] == 'TRUE' && row['student_id'] != id;
+  // READ: Fetches peers (Case-insensitive matching)
+  Future<List<Map<String, String>>> getPeers(String myId) async {
+    final rows = await _worksheet!.values.map.allRows() ?? [];
+    final String myIdClean = myId.trim().toUpperCase();
+
+    // DEBUG PRINT
+    print("DEBUG: Fetched ${rows.length} rows: $rows"); 
+
+    return rows.where((row) {
+      // 1. Get is_active safely (handle 'TRUE', 'True', 'true')
+      String activeStatus = row['is_active'].toString().toLowerCase();
+      bool isActive = activeStatus == 'true';
+      
+      // 2. Get Row ID safely & force Uppercase for comparison
+      String rowId = (row['student_id'] ?? "").toString().toUpperCase().trim();
+
+      // 3. Return only if Active AND Not Me
+      return isActive && rowId != myIdClean;
     }).toList();
   }
   
-  // Equivalent to: st.sidebar.button("GO OFFLINE") logic
+  // OFFLINE: Sets user to inactive (Finds row via Uppercase ID)
   Future<void> setOffline(String id) async {
+    final String cleanId = id.trim().toUpperCase();
     final rows = await _worksheet!.values.map.allRows() ?? [];
+    
     int rowIndex = -1;
     for (int i = 0; i < rows.length; i++) {
-      if (rows[i]['student_id'] == id) {
+      if (rows[i]['student_id'].toString().toUpperCase() == cleanId) {
         rowIndex = i + 2;
         break;
       }
     }
+    
     if (rowIndex != -1) {
-      await _worksheet!.values.insertValue('FALSE', column: 4, row: rowIndex); // Assuming is_active is col 4
+      await _worksheet!.values.insertValue('FALSE', column: 4, row: rowIndex); 
     }
   }
 }
 
-// B. UDP DISCOVERY (Replaces socket threads)
+// B. UDP DISCOVERY (Local WiFi)
 class P2PService {
   RawDatagramSocket? _socket;
   final StreamController<Map<String, String>> _peerController = StreamController.broadcast();
@@ -138,7 +151,11 @@ class P2PService {
 
     Timer.periodic(const Duration(seconds: 4), (t) {
       if (_socket == null) t.cancel();
-      _socket?.send(utf8.encode("RESCHEDULE_PEER:$name"), InternetAddress("255.255.255.255"), 5005);
+      try {
+        _socket?.send(utf8.encode("RESCHEDULE_PEER:$name"), InternetAddress("255.255.255.255"), 5005);
+      } catch (e) {
+        // silent fail
+      }
     });
   }
 
@@ -148,7 +165,7 @@ class P2PService {
   }
 }
 
-// C. KNN MATH (Replaces sklearn)
+// C. KNN MATH
 class KNN {
   static double similarity(List<String> mine, String theirsStr) {
     final theirs = theirsStr.split(',');
@@ -221,6 +238,8 @@ class _HubScreenState extends State<HubScreen> {
   Map<String, String> localPeers = {}; // IP: Name
   List<Map<String, String>> cloudPeers = [];
   bool isLoading = false;
+  
+  Timer? _cloudSyncTimer;
 
   // Services
   final _p2p = P2PService();
@@ -229,29 +248,66 @@ class _HubScreenState extends State<HubScreen> {
   @override
   void dispose() {
     _p2p.stop();
-    // Ideally set offline in sheets here too
+    _cloudSyncTimer?.cancel();
     super.dispose();
   }
 
-  Future<void> _connect() async {
-    setState(() => isLoading = true);
-    await _sheets.init();
-    await _sync(); // Initial Sync
-    _p2p.start(_nameCtrl.text);
-    _p2p.peerStream.listen((p) => setState(() => localPeers[p['ip']!] = p['name']!));
-    setState(() { isLoading = false; isLoggedIn = true; });
+  bool _isValidRollNumber(String roll) {
+    // Regex allows upper or lowercase input
+    final RegExp regex = RegExp(r'^20\d{2}[kK][uU](?:[cC][pP]1\d{3}|[aA][dD]3\d{3}|[eE][cC]2\d{3})$');
+    return regex.hasMatch(roll.trim());
   }
 
-  Future<void> _sync() async {
-    if (isLoading) return;
-    setState(() => isLoading = true);
-    try {
-      final peers = await _sheets.syncUserAndGetPeers(_idCtrl.text, _nameCtrl.text, myFocus);
-      setState(() => cloudPeers = peers);
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Sync Error: $e")));
+  Future<void> _connect() async {
+    // 1. Validation
+    if (_nameCtrl.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Enter a Nickname!")));
+      return;
     }
-    setState(() => isLoading = false);
+    if (!_isValidRollNumber(_idCtrl.text)) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text("Invalid Format! Use 20XXkuXX1XXX, 2XXX, or 3XXX"),
+        backgroundColor: Colors.red,
+      ));
+      return;
+    }
+
+    setState(() => isLoading = true);
+    
+    try {
+      // 2. Initialize
+      await _sheets.init();
+      
+      // 3. WRITE ONCE (Register me as active - logic will force uppercase)
+      await _sheets.registerMe(_idCtrl.text, _nameCtrl.text, myFocus);
+      
+      // 4. READ (Get current peers immediately)
+      await _refreshCloudPeers(silent: false);
+
+      // 5. Start UDP
+      _p2p.start(_nameCtrl.text);
+      _p2p.peerStream.listen((p) => setState(() => localPeers[p['ip']!] = p['name']!));
+
+      // 6. Start Cloud Polling (READ ONLY every 10s)
+      _cloudSyncTimer = Timer.periodic(const Duration(seconds: 10), (_) => _refreshCloudPeers(silent: true));
+
+      setState(() { isLoading = false; isLoggedIn = true; });
+    } catch (e) {
+       setState(() => isLoading = false);
+       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Connection Error: $e")));
+    }
+  }
+
+  // READ ONLY function
+  Future<void> _refreshCloudPeers({bool silent = false}) async {
+    if (!silent) setState(() => isLoading = true);
+    try {
+      final peers = await _sheets.getPeers(_idCtrl.text);
+      if (mounted) setState(() => cloudPeers = peers);
+    } catch (e) {
+      if (!silent) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Sync Error: $e")));
+    }
+    if (!silent && mounted) setState(() => isLoading = false);
   }
 
   @override
@@ -265,7 +321,7 @@ class _HubScreenState extends State<HubScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh), 
-            onPressed: _sync
+            onPressed: () => _refreshCloudPeers(silent: false)
           ),
           IconButton(
             icon: const Icon(Icons.exit_to_app, color: Colors.red),
@@ -281,11 +337,11 @@ class _HubScreenState extends State<HubScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // 1. LOCAL UDP
+            // LOCAL UDP
             const Text("📶 Local Mesh Nodes", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             const SizedBox(height: 10),
             if (localPeers.isEmpty) 
-              const Text("Scanning WiFi...", style: TextStyle(color: Colors.grey))
+              const Text("Scanning Local WiFi...", style: TextStyle(color: Colors.grey, fontSize: 12))
             else 
               ...localPeers.values.map((name) => PrismCard(
                 child: Row(children: [
@@ -299,9 +355,12 @@ class _HubScreenState extends State<HubScreen> {
 
             const Divider(height: 40, color: Color(0xFF30363D)),
 
-            // 2. ONLINE CLOUD
-            const Text("🤖 AI-Matched Peers", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            // ONLINE CLOUD
+            const Text("🤖 AI-Matched Peers (Internet)", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 5),
+            const Text("Auto-refreshing...", style: TextStyle(color: Colors.grey, fontSize: 10)),
             const SizedBox(height: 10),
+            
             Wrap(
               spacing: 8,
               children: ["Python", "DSA", "ML", "Math"].map((tag) => FilterChip(
@@ -309,7 +368,9 @@ class _HubScreenState extends State<HubScreen> {
                 selected: myFocus.contains(tag),
                 onSelected: (sel) {
                   setState(() => sel ? myFocus.add(tag) : myFocus.remove(tag));
-                  _sync(); // Trigger sync on change
+                  // If interests change, update sheet immediately
+                  _sheets.registerMe(_idCtrl.text, _nameCtrl.text, myFocus); 
+                  _refreshCloudPeers(silent: false);
                 },
                 backgroundColor: const Color(0xFF21262D),
                 checkmarkColor: const Color(0xFF00F2FE),
@@ -389,8 +450,6 @@ class SuccessScreen extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-             
-
             const Icon(Icons.check_circle, color: Color(0xFF00F2FE), size: 80),
             const SizedBox(height: 20),
             Text("LINKED WITH ${name.toUpperCase()}", style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900)),
