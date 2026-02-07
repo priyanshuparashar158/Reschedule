@@ -7,10 +7,10 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:gsheets/gsheets.dart';
 
 // --- 1. CONFIGURATION ---
-const String spreadsheetId = 'your credentials'; // Your Sheet ID
+const String spreadsheetId = 'your data'; // Your Sheet ID
 const String credentialsJson = r'''
 {
-  your credentials
+  your data
 }
 '''; 
 
@@ -167,22 +167,23 @@ class P2PService {
 
 // C. KNN MATH
 class KNN {
+  //jaccard
   static double similarity(List<String> mine, String theirsStr) {
-    final theirs = theirsStr.split(',');
-    final all = ["Python", "DSA", "ML", "Math", "Linear Algebra"];
-    
-    var vecA = all.map((i) => mine.contains(i) ? 1.0 : 0.0).toList();
-    var vecB = all.map((i) => theirs.contains(i) ? 1.0 : 0.0).toList();
+    // 1. Convert both to Sets for set math
+    final setA = mine.toSet();
+    final setB = theirsStr.split(',').map((e) => e.trim()).toSet();
 
-    double dot = 0, magA = 0, magB = 0;
-    for (int i = 0; i < all.length; i++) {
-      dot += vecA[i] * vecB[i];
-      magA += vecA[i] * vecA[i];
-      magB += vecB[i] * vecB[i];
-    }
-    
-    if (magA == 0 || magB == 0) return 0.0;
-    return (dot / (sqrt(magA) * sqrt(magB))) * 100;
+    // 2. Find the Intersection (items in BOTH)
+    final intersection = setA.intersection(setB).length;
+
+    // 3. Find the Union (total UNIQUE items in either)
+    final union = setA.union(setB).length;
+
+    // 4. Prevent division by zero
+    if (union == 0) return 0.0;
+
+    // 5. Return as a percentage
+    return (intersection / union) * 100;
   }
 }
 
