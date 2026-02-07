@@ -1,0 +1,23 @@
+name: reschedule
+description: "A new Flutter project."
+publish_to: 'none'
+version: 0.1.0
+
+environment:
+  sdk: ^3.9.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  google_fonts: ^6.1.0
+  gsheets: 0.5.0  # For the 'Inter' font
+  animate_do: ^3.1.0    # For UI animations
+  http: ^1.1.0       # To fetch online data
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
